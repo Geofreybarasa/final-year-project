@@ -3,7 +3,7 @@ import torch.nn as nn
 from torchvision import models
 import os
 
-# Path to your saved model (adjust if needed)
+
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "best_model.pth")
 
 # Recreate the exact architecture from training
@@ -27,3 +27,4 @@ def load_model():
     model.eval()
 
     return model, device
+

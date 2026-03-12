@@ -10,7 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const PYTHON_SERVICE_URL = process.env.PYTHON_URL || 'http://localhost:5000/predict';
 
-// Set up EJS as templating engine
+// Set up EJS as templating(view) engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
