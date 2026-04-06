@@ -22,11 +22,14 @@ dropZone.addEventListener('dragover', e => {
     dropZone.classList.add('dragging');
 });
 
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('dragging');
+});
 
 dropZone.addEventListener('drop', e => {
     e.preventDefault();
     dropZone.classList.remove('dragging');
+
     const file = e.dataTransfer.files[0];
     if (file) {
         droppedFile = file;
@@ -41,8 +44,10 @@ fileInput.addEventListener('change', () => {
     }
 });
 
+// ─── Show Preview ─────────────────────────────────────────────
 function showPreview(file) {
     const reader = new FileReader();
+
     reader.onload = e => {
         previewImg.src         = e.target.result;
         preview.style.display  = 'block';
@@ -50,57 +55,67 @@ function showPreview(file) {
         fileNameEl.textContent = `${file.name} · ${(file.size / 1024).toFixed(1)} KB`;
         dropTitle.textContent  = 'Image loaded — ready for analysis';
     };
+
     reader.readAsDataURL(file);
 }
 
 // ─── Analyse button ────────────────────────────────────────────
-analyzeBtn.addEventListener('click', (e) => {
+analyzeBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     e.stopPropagation();
 
     const file = droppedFile || fileInput.files[0];
     if (!file) {
-        alert('Please select or drop an image first.');
+        alert("Please select an image first.");
         return;
     }
 
-    // Reset previous results
+    // UI Reset
+    const errorMsg    = document.getElementById('errorMsg');
     const resultPanel = document.getElementById('resultPanel');
-    resultPanel.style.display = 'none';
-    document.getElementById('heatmapSection').style.display = 'none';
-    document.getElementById('errorMsg').style.display       = 'none';
+    const heatSection = document.getElementById('heatmapSection');
 
-    // Scanning state
+    errorMsg.style.display    = 'none';
+    resultPanel.style.display = 'none';
+    heatSection.style.display = 'none';
+
+    // Show loading
     document.getElementById('scanBar').style.display = 'block';
     analyzeBtn.textContent = 'Analysing…';
     analyzeBtn.disabled    = true;
 
     const formData = new FormData();
-    formData.append('image', file, file.name);
+    formData.append('image', file);
 
-    fetch('/upload', { method: 'POST', body: formData })
-        .then(res => res.text())
-        .then(html => {
-            const parser    = new DOMParser();
-            const doc       = parser.parseFromString(html, 'text/html');
-            const resultDiv = doc.getElementById('server-result');
-            if (resultDiv) {
-                const result = JSON.parse(resultDiv.dataset.result);
-                renderResult(result);
-            } else {
-                renderResult({ error: 'No result returned from server.' });
-            }
-        })
-        .catch(err => {
-            console.error('Upload error:', err);
-            renderResult({ error: 'Upload failed. Please try again.' });
-        })
-        .finally(() => {
-            document.getElementById('scanBar').style.display = 'none';
-            analyzeBtn.textContent = 'Run Analysis';
-            analyzeBtn.disabled    = false;
-            droppedFile            = null;
+    try {
+        const response = await fetch('/upload', {
+            method: 'POST',
+            body: formData
         });
+
+        const text = await response.text();
+
+        // Parse returned HTML
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(text, 'text/html');
+        const resultScript = doc.getElementById('server-result');
+
+        if (resultScript && resultScript.textContent.trim()) {
+            const result = JSON.parse(resultScript.textContent);
+            renderResult(result);
+        } else {
+            renderResult({ error: "No result returned from server." });
+        }
+
+    } catch (err) {
+        console.error("Request error:", err);
+        renderResult({ error: "Upload failed. Check server connection." });
+    } finally {
+        document.getElementById('scanBar').style.display = 'none';
+        analyzeBtn.textContent = 'RUN ANALYSIS';
+        analyzeBtn.disabled    = false;
+        droppedFile            = null;
+    }
 });
 
 // ─── Result renderer ───────────────────────────────────────────
@@ -117,113 +132,68 @@ function renderResult(result) {
     const heatImg     = document.getElementById('heatmapImg');
     const errorMsg    = document.getElementById('errorMsg');
 
-    // Reset
-    errorMsg.style.display    = 'none';
-    heatSection.style.display = 'none';
-    panel.style.display       = 'block';
+    panel.style.display = 'block';
+    errorMsg.style.display = 'none';
 
     if (result.error) {
         verdictLbl.textContent = 'ANALYSIS ERROR';
-        verdictTxt.textContent = 'ERROR';
+        verdictTxt.textContent = 'FAILED';
         verdictTxt.className   = 'verdict-text error';
-        verdictIco.className   = 'verdict-icon error';
         verdictIco.textContent = '⚠';
+        verdictIco.className   = 'verdict-icon error';
+
         errorMsg.style.display = 'block';
         errorMsg.textContent   = result.error;
+
         panel.scrollIntoView({ behavior: 'smooth' });
         return;
     }
 
-    const isReal = result.prediction === 'real';
-    const cls    = result.prediction;
-    const pct    = result.confidence || 0;
+    const cls = (result.prediction || 'unknown').toLowerCase();
+    const pct = result.confidence || 0;
 
+    // Verdict
     verdictLbl.textContent = 'ANALYSIS COMPLETE';
     verdictTxt.textContent = cls.toUpperCase();
     verdictTxt.className   = `verdict-text ${cls}`;
+    verdictIco.textContent = cls === 'real' ? '✓' : '✕';
     verdictIco.className   = `verdict-icon ${cls}`;
-    verdictIco.textContent = isReal ? '✓' : '✕';
 
-    confFill.className = `conf-fill ${cls}`;
-    setTimeout(() => { confFill.style.width = `${pct}%`; }, 50);
+    // Confidence
     confPct.textContent    = `${pct}%`;
     metricConf.textContent = `${pct}%`;
     metricVerd.textContent = cls.toUpperCase();
 
-    // ── Forensic Panel ─────────────────────────────────────────
+    confFill.className = `conf-fill ${cls}`;
+    setTimeout(() => {
+        confFill.style.width = `${pct}%`;
+    }, 50);
+
+    // Heatmap / forensic panel
     if (result.heatmap) {
-        // Update label
-        const heatTitle = document.querySelector('.heatmap-title');
-        if (heatTitle) heatTitle.textContent = 'FORENSIC ANALYSIS PANEL';
-
-        // Image — full width, crisp rendering
         heatImg.src = result.heatmap;
-        heatImg.style.cssText = `
-            width: 100%;
-            height: auto;
-            display: block;
-            border: 1px solid rgba(0,229,255,0.2);
-            border-radius: 4px;
-            image-rendering: -webkit-optimize-contrast;
-            image-rendering: crisp-edges;
-            margin-top: 12px;
-            cursor: zoom-in;
-        `;
+        heatSection.style.display = 'block';
 
-        // Click image to open full size in new tab
+        // Optional: click to open full image
         heatImg.onclick = () => {
             const win = window.open();
-            win.document.write(`
-                <html><head><title>VERITAS — Forensic Panel</title>
-                <style>body{margin:0;background:#080c10;display:flex;justify-content:center;align-items:flex-start;}
-                img{max-width:100%;height:auto;}</style></head>
-                <body><img src="${result.heatmap}"/></body></html>
-            `);
+            win.document.write(`<img src="${result.heatmap}" style="width:100%">`);
         };
-
-        // Download button
-        let dlBtn = document.getElementById('downloadPanel');
-        if (!dlBtn) {
-            dlBtn = document.createElement('a');
-            dlBtn.id            = 'downloadPanel';
-            dlBtn.textContent   = '⬇  Download Full Panel';
-            dlBtn.style.cssText = `
-                display: inline-block;
-                margin-top: 12px;
-                padding: 8px 18px;
-                background: rgba(0,229,255,0.08);
-                border: 1px solid rgba(0,229,255,0.35);
-                color: #00e5ff;
-                font-family: 'Syne Mono', monospace;
-                font-size: 0.7rem;
-                letter-spacing: 0.1em;
-                border-radius: 3px;
-                cursor: pointer;
-                text-decoration: none;
-                transition: background 0.2s;
-            `;
-            dlBtn.onmouseover = () => dlBtn.style.background = 'rgba(0,229,255,0.15)';
-            dlBtn.onmouseout  = () => dlBtn.style.background = 'rgba(0,229,255,0.08)';
-            heatSection.appendChild(dlBtn);
-        }
-        dlBtn.href     = result.heatmap;
-        dlBtn.download = `veritas-forensic-${Date.now()}.jpg`;
-
-        heatSection.style.display = 'block';
     }
 
     panel.scrollIntoView({ behavior: 'smooth' });
 }
 
-// ─── Bootstrap: EJS server-side injection ─────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-    const resultDiv = document.getElementById('server-result');
-    if (resultDiv) {
+// ─── Bootstrap (handles page reload results) ──────────────────
+window.addEventListener('DOMContentLoaded', () => {
+    const el = document.getElementById('server-result');
+
+    if (el && el.textContent.trim().length > 5) {
         try {
-            const result = JSON.parse(resultDiv.dataset.result);
+            const result = JSON.parse(el.textContent);
             renderResult(result);
         } catch (e) {
-            console.error('Failed to parse server result:', e);
+            console.error("Initial parse failed:", e);
         }
     }
 });
